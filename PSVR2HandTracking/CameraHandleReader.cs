@@ -12,15 +12,15 @@ public class SharedMemoryData
 // csharp
 public class CameraParameters
 {
-    public float[] Coeffs = new float[20];
+    public double[] Coeffs = new double[20];
 }
 // csharp
 public class CameraIntrinsics
 {
-    public float fx;
-    public float fy;
-    public float cx;
-    public float cy;
+    public float Fx;
+    public float Fy;
+    public float Cx;
+    public float Cy;
 }
 
 public static class CalibrationReader
@@ -63,22 +63,28 @@ public static class CalibrationReader
                 int camIdAtEntry = Marshal.ReadInt32(cfgPtr);
                 if (camIdAtEntry == cameraId)
                 {
-                    // Read 20 float coefficients starting at offset 4
-                    int coeffsOffset = 4;
+                    Console.WriteLine(ReadInt16(IntPtr.Add(cfgPtr, 4)));
+                    Console.WriteLine(ReadInt16(IntPtr.Add(cfgPtr, 6)));
+                    int coeffsOffset = 44;
                     for (int j = 0; j < CoeffCount; j++)
                     {
-                        IntPtr valPtr = IntPtr.Add(cfgPtr, coeffsOffset + j * 4);
-                        _params.Coeffs[j] = ReadFloat(valPtr);
+                        IntPtr valPtr = IntPtr.Add(cfgPtr, coeffsOffset + j * 8);
+                        _params.Coeffs[j] = ReadDouble(valPtr);
                     }
+                    
+                    int pxMatOffset = 8;
 
-                    // pxMat assumed right after coefficients (offset = 4 + 20*4 = 84)
-                    int pxMatOffset = coeffsOffset + CoeffCount * 4;
-
-                    _intrinsics.fx = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 0 * 4));
-                    _intrinsics.cx = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 2 * 4));
-                    _intrinsics.fy = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 4 * 4));
-                    _intrinsics.cy = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 5 * 4));
-
+                    _intrinsics.Fx = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 0 * 4));
+                    _intrinsics.Cx = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 2 * 4));
+                    _intrinsics.Fy = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 4 * 4));
+                    _intrinsics.Cy = ReadFloat(IntPtr.Add(cfgPtr, pxMatOffset + 5 * 4));
+                    Console.WriteLine($"FXY: {(_intrinsics.Fx, _intrinsics.Fy)} CXY: {(_intrinsics.Cx, _intrinsics.Cy)}");
+                    // Given your GetDistortedPoint implementation and CameraIntrinsics/CameraParameters
+                    double xCenterNorm = 0.0, yCenterNorm = 0.0;
+                    var centerDist = DistortionMeshes.GetDistortedPoint(xCenterNorm, yCenterNorm, _params);
+                    double srcCx = centerDist.X * _intrinsics.Fx + _intrinsics.Cx;
+                    double srcCy = centerDist.Y * _intrinsics.Fy + _intrinsics.Cy;
+                    Console.WriteLine($"centerDist normalized: ({centerDist.X}, {centerDist.Y}), srcPixel: ({srcCx}, {srcCy})");
                     found = true;
                     break;
                 }
@@ -108,5 +114,20 @@ public static class CalibrationReader
         byte[] tmp = new byte[4];
         Marshal.Copy(ptr, tmp, 0, 4);
         return BitConverter.ToSingle(tmp, 0);
+    }
+
+    private static double ReadDouble(IntPtr ptr)
+    {
+        // Safe generic read of an 8-byte double from unmanaged memory
+        byte[] tmp = new byte[8];
+        Marshal.Copy(ptr, tmp, 0, 8);
+        return BitConverter.ToDouble(tmp, 0);
+    }
+    private static double ReadInt16(IntPtr ptr)
+    {
+        // Safe generic read of a 2-byte int from unmanaged memory
+        byte[] tmp = new byte[2];
+        Marshal.Copy(ptr, tmp, 0, 2);
+        return BitConverter.ToInt16(tmp, 0);
     }
 }

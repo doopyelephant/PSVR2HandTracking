@@ -25,11 +25,14 @@ public static class Program
         0xD0C000,
         0xF0C100
     };
+    private static MemoryMappedViewAccessor accessor;
 
     private static MemoryMappedFile _shareFile;
     private static EventWaitHandle _imageEvent;
     private static MemoryMappedViewStream _imageViewStream;
     private static int _index = 0;
+    private static Mat undistortionX = new Mat();
+    private static Mat undistortionY = new Mat();
 
     public static void Main()
     {
@@ -37,11 +40,18 @@ public static class Program
         _imageEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "SHARE_VRT2_WIN_IMAGE_EVT");
 
         var data = new SharedMemoryData();
+        data.pBuf = SharedMemoryNative.MapRead(_shareFile);
         var cameraParams = new CameraParameters();
         var intrinsics = new CameraIntrinsics();
         CalibrationReader.GetDistortionConfig(data, 0, ref cameraParams, ref intrinsics);
-
-        //Update();
+        foreach (var VARIABLE in cameraParams.Coeffs)
+        {
+            Console.WriteLine(VARIABLE);
+        }
+        DistortionMeshes.CreateUndistortionMaps(1024,1016,1f,intrinsics,cameraParams,out var mapX, out var mapY);
+        undistortionX = mapX;
+        undistortionY = mapY;
+        Update();
 
         Exit();
     }
@@ -70,20 +80,20 @@ public static class Program
 
             // Decode the image
             // This example assumes you know the width and height of the original image
-            Image<Rgba32> decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1000,CompressionFormat.Bc4);
+            Image<Rgba32> decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1016,CompressionFormat.Bc4);
             Console.WriteLine("after decode");
 
-            Image<Rgba32> decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1000,CompressionFormat.Bc4);
+            Image<Rgba32> decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1016,CompressionFormat.Bc4);
             Console.WriteLine("after decode");
 
             Mat _left = ConvertImageSharpToGrayscaleMat(decodedImage);
             Mat _right = ConvertImageSharpToGrayscaleMat(decodedImageright);
-            Mat left = new Mat(new Size(1024, 1000),MatType.CV_8UC1);
-            Mat right = new Mat(new Size(1024, 1000),MatType.CV_8UC1);
+            Mat left = new Mat(new Size(1024, 1016),MatType.CV_8UC1);
+            Mat right = new Mat(new Size(1024, 1016),MatType.CV_8UC1);
 
 
 
-           if (File.Exists("./calibration.cal"))
+          /* if (File.Exists("./calibration.cal"))
            {
                Mat cameraMatrix2 = Mat.Eye(3, 3, MatType.CV_64F);
                double[,] matrix2 = new double[3,3];
@@ -113,28 +123,31 @@ public static class Program
                }
 
                Cv2.Undistort(_left, left, cameraMatrix2, distCoeffs2);
-           }
-           using (new Window("left image", left))
+           }*/
+          Mat undistortion = new Mat();
+          undistortion = UndistortDiagnostics.BuildMapFromXY(undistortionX,undistortionY);
+          UndistortDiagnostics.AnalyzeMap(undistortion,"run1");
+          Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+          Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
 
-           using (new Window("right image", _left))
+          using (new Window("left image", left))
+
+           using (new Window("right image", right))
            {
                Cv2.WaitKey();
            }
-           var stereo = StereoBM.Create(16,15);
-           Mat depth = new Mat();
-           stereo.Compute(left, right, depth);
-           Mat normalized = new Mat();
-           Cv2.Normalize(depth, normalized, 0, 255, NormTypes.MinMax);
-           using (new Window("depth image", depth))
-           {
-               Cv2.WaitKey();
-           }
+           left.SaveImage("left.png");
+           RemapRingDiagnostics.RunAllDiagnostics(_left,undistortion,"run2");
+           UndistortDiagnostics.RemapAndSave(_left,undistortion,"run1.png");
+
 
            List<Point3f[]> objpoints;
            objpoints = new List<Point3f[]>();
            List<Point2f[]> imagepoints;
            imagepoints = new List<Point2f[]>();
-           for (int i = 0; i < 25; i++)
+           List<Point2f[]> imagepointsr;
+           imagepointsr = new List<Point2f[]>();
+           for (int i = 0; i < 10; i++)
            {
                bool found = Cv2.FindChessboardCorners(left, new Size(10, 7), out var corners);
                Console.WriteLine(found);
@@ -143,12 +156,20 @@ public static class Program
                {
                    Cv2.WaitKey();
                }
+               bool foundr = Cv2.FindChessboardCorners(right, new Size(10, 7), out var cornersr);
+               Console.WriteLine(found);
+               Cv2.DrawChessboardCorners(right, new Size(10, 7), cornersr, foundr);
+               using (new Window("chess image", right))
+               {
+                   Cv2.WaitKey();
+               }
                 Thread.Sleep(1500);
 
-               if (found)
+               if (found && foundr)
                {
                    Console.WriteLine("Chessboard found!");
                    imagepoints.Add(corners.ToArray());
+                   imagepointsr.Add(cornersr.ToArray());
                    objpoints.Add(CreateChessboardObjectPoints());
                }
 
@@ -164,20 +185,80 @@ public static class Program
                dataright = new byte[0x7F000];
                Array.Copy(buffer, 0x100 + 0x7F000, dataright, 0, 0x7F000);
                _imageViewStream.Dispose();
-               decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1000,CompressionFormat.Bc4);
+               decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1016,CompressionFormat.Bc4);
                Console.WriteLine("after decode");
-               decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1000,CompressionFormat.Bc4);
+               decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1016,CompressionFormat.Bc4);
                Console.WriteLine("after decode");
-               left = ConvertImageSharpToGrayscaleMat(decodedImage);
-               right = ConvertImageSharpToGrayscaleMat(decodedImageright);
+               _left = ConvertImageSharpToGrayscaleMat(decodedImage);
+               _right = ConvertImageSharpToGrayscaleMat(decodedImageright);
+               Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+               Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
            }
            Mat cameraMatrix = Mat.Eye(3, 3, MatType.CV_64F);
            double[,] matrix = new double[3,3];
            Mat distCoeffs = Mat.Zeros(1, 5, (MatType)MatType.CV_64F);
          double[] distortion = new double[5];
+         Mat H1 = new Mat();
+         Mat H2 = new Mat();
+         double[,] matrix1 = new double[3,3];
+         double[,] matrix2 = new double[3,3];
+         double[] coeffs1 = new double[5];
+         double[] coeffs2 = new double[5];
+         Mat R = new Mat();
+         Mat T = new Mat();
+         Mat E = new Mat();
+         Mat F = new Mat();
 
+            Cv2.StereoCalibrate(objpoints,imagepoints,imagepointsr,matrix1,coeffs1,matrix2,coeffs2,left.Size(),R,T,E,F,CalibrationFlags.None);
           Cv2.CalibrateCamera(objpoints, imagepoints, left.Size(), matrix,distortion,out Vec3d[] rotation,out Vec3d[] translation,CalibrationFlags.None);
-Console.WriteLine("calibrated");
+          R.GetRectangularArray(out double[,] _R);
+          T.GetArray(out double[] _T);
+          Cv2.StereoRectify(matrix1,coeffs1,matrix2,coeffs2,left.Size(),_R,_T,out var R1,out var R2,out var P1,out var P2,out var Q,StereoRectificationFlags.None,-1,left.Size(),out var Valid1,out var Valid2);
+
+        Mat _matrix1 = new Mat();
+        Mat _matrix2 = new Mat();
+        _matrix1.SetRectangularArray(matrix1);
+        _matrix2.SetRectangularArray(matrix2);
+
+        Mat _coeffs1 = new Mat();
+        Mat _coeffs2 = new Mat();
+        _coeffs1.SetArray(coeffs1);
+        _coeffs2.SetArray(coeffs2);
+
+        Mat _R1 = new Mat();
+        Mat _R2 = new Mat();
+        _R1.SetRectangularArray(R1);
+        _R2.SetRectangularArray(R2);
+        Mat _P1 = new Mat();
+        Mat _P2 = new Mat();
+        _P1.SetRectangularArray(P1);
+        _P2.SetRectangularArray(P2);
+        Mat map1L = new Mat(), map2L = new Mat();
+        Cv2.InitUndistortRectifyMap(_matrix1, _coeffs1, _R1, _P1, left.Size(), MatType.CV_16SC2.Value, map1L, map2L);
+
+        Mat map1R = new Mat(), map2R = new Mat();
+        Cv2.InitUndistortRectifyMap(_matrix2, _coeffs2, _R2, _P2, left.Size(), MatType.CV_16SC2.Value, map1R, map2R);
+        Mat map1 = new Mat(), map2 = new Mat();
+        Cv2.Remap(left,map1,map1L,map2L,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+        Cv2.Remap(right,map2,map1R,map2R,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+        left = map1;
+        right = map2;
+
+
+        var stereo = StereoBM.Create(16,15);
+          Mat left8bit = new Mat();
+          Mat right8bit = new Mat();
+          left.ConvertTo(left8bit, MatType.CV_8UC1);
+          right.ConvertTo(right8bit, MatType.CV_8UC1);
+          Mat depth = new Mat();
+          stereo.Compute(left8bit, right8bit, depth);
+
+          using (new Window("depth image", depth))
+          {
+              Cv2.WaitKey();
+          }
+
+          Console.WriteLine("calibrated");
 Console.WriteLine("Rotation: ");
 cameraMatrix.SetRectangularArray(matrix);
 distCoeffs.SetArray(distortion);
