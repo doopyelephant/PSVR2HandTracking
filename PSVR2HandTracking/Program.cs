@@ -12,6 +12,9 @@ using Mediapipe.Net;
 using PSVR2HandTracking;
 using Size = OpenCvSharp.Size;
 
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+
 public static class Program
 {
     private static long[] _offsets = new long[]
@@ -127,8 +130,50 @@ public static class Program
           Mat undistortion = new Mat();
           undistortion = UndistortDiagnostics.BuildMapFromXY(undistortionX,undistortionY);
           UndistortDiagnostics.AnalyzeMap(undistortion,"run1");
+          int[] dimensions = { 1, 1, 160, 160 };
           Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
           Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+      Mat modelinputleft = new Mat();
+      Mat modelinputright = new Mat();
+        Cv2.Resize(left,modelinputleft,new Size(160,160));
+        Cv2.Resize(right,modelinputright,new Size(160,160));
+
+          var session = new InferenceSession("C:\\Users\\nolan\\Downloads\\grayscale_detection_160x160.onnx");
+          Tensor<float> valuesleft;
+          valuesleft = new DenseTensor<float>(dimensions);
+          int index = 0;
+          for (int y = 0; y < 160; y++)
+          {
+              for (int x = 0; x < 160; x++)
+              {
+                  // Get the 8-bit (byte) pixel value from the Mat
+                  byte pixelValue = modelinputleft.At<byte>(y, x);
+
+                  // Normalize and add to the 1D float array
+                  valuesleft[index++] = (float)pixelValue / 255.0f;
+              }
+          }
+
+              /*session.InputNames.ToList().ForEach(Console.WriteLine);
+     session.OutputNames.ToList().ForEach(Console.WriteLine);
+     foreach (var item in session.InputNames)
+     {
+         Console.WriteLine("Dimensions: " + session.InputMetadata[item].Dimensions[0]);
+         Console.WriteLine("Dimensions: " + session.InputMetadata[item].Dimensions[1]);
+         Console.WriteLine("ElementDataType: " + session.InputMetadata[item].ElementDataType);
+         Console.WriteLine("IsTensor: " + session.InputMetadata[item].IsTensor);
+         Console.WriteLine("Type: " + session.InputMetadata[item].OnnxValueType);
+     }*/
+          var inputs = new List<NamedOnnxValue>();
+          var outputs = new List<NamedOnnxValue>();
+          NamedOnnxValue input = NamedOnnxValue.CreateFromTensor(session.InputNames[0], valuesleft);
+          inputs.Add(input);
+          session.Run(inputs,outputs);
+          Console.WriteLine(outputs[0].Name + outputs[0].Value);
+
+
+
+
 
           using (new Window("left image", left))
 
