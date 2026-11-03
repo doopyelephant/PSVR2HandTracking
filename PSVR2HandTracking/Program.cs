@@ -130,8 +130,7 @@ public static class Program
                Cv2.Undistort(_left, left, cameraMatrix2, distCoeffs2);
            }*/
           Mat undistortion = new Mat();
-          undistortion = UndistortDiagnostics.BuildMapFromXY(undistortionX,undistortionY);
-          UndistortDiagnostics.AnalyzeMap(undistortion,"run1");
+
 
           Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
           Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
@@ -262,8 +261,7 @@ public static class Program
                Cv2.WaitKey();
            }
            left.SaveImage("left.png");
-           RemapRingDiagnostics.RunAllDiagnostics(_left,undistortion,"run2");
-           UndistortDiagnostics.RemapAndSave(_left,undistortion,"run1.png");
+
 
 
            List<Point3f[]> objpoints;
@@ -420,7 +418,7 @@ distCoeffs.SetArray(distortion);
            file += item + "\n";
        }
        File.WriteAllText("./calibration.cal",file);
-           StereoRectifyFisheye.FishEyeUndistort.Undistort(ref left,ref right,"C:\\Users\\nolan\\Downloads\\psvr2_threshold.calibration.json");
+         //  StereoRectifyFisheye.FishEyeUndistort.Undistort(ref left,ref right,"C:\\Users\\nolan\\Downloads\\psvr2_threshold.calibration.json");
 
     }
     public static Mat ConvertImageSharpToMat(Image<Rgba32> image)
