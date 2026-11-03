@@ -16,13 +16,9 @@ using Size = OpenCvSharp.Size;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Point = OpenCvSharp.Point;
-using Rect = OpenCvSharp.Rect;
-using DirectN;
 
 public static class Program
 {
-    private static IComObject<IMFVirtualCamera>? _camera;
-    //public const string CLSID_VCamNet = "A8C3D28A-238A-421A-8919-6AA97A44B634";
     private static long[] _offsets = new long[]
     {
         0x10BA00,
@@ -60,46 +56,7 @@ public static class Program
         DistortionMeshes.CreateUndistortionMaps(1024,1016,1f,intrinsics,cameraParams,out var mapX, out var mapY);
         undistortionX = mapX;
         undistortionY = mapY;
-      /*  MFFunctions.MFStartup();
-        var hr = Functions.MFCreateVirtualCamera(
-            __MIDL___MIDL_itf_mfvirtualcamera_0000_0000_0001.MFVirtualCameraType_SoftwareCameraSource,
-            __MIDL___MIDL_itf_mfvirtualcamera_0000_0000_0002.MFVirtualCameraLifetime_Session,
-            __MIDL___MIDL_itf_mfvirtualcamera_0000_0000_0003.MFVirtualCameraAccess_CurrentUser,
-            "PSVR2CAM",
-            "{" + CLSID_VCamNet + "}",
-            null,
-            0,
-            out var camera);
-        if (hr.IsSuccess)
-        {
-            Console.WriteLine("Virtual camera created successfully.");
-            _camera = new ComObject<IMFVirtualCamera>(camera);
-            hr = _camera.Object.Start(null);
-        }
-        else
-        {
-            Console.WriteLine("Failed to create virtual camera.");
-        }
-
-        Console.WriteLine("Code: " + hr.Value);*/
-        long capacity = 1920 * 960;
-        using var frameReadySemaphore = new Semaphore(0, 1, "PSVR2_FRAME_READY");
-        using var mmf = MemoryMappedFile.CreateOrOpen("PSVR2_SHARED_MEM", capacity);
-        using var accessor = mmf.CreateViewAccessor();
-
-        while (true)
-        {
-            byte[] frameBytes = Update(); // Your method
-
-            // Write frame to shared memory
-            accessor.WriteArray(0, frameBytes, 0, frameBytes.Length);
-
-            // Signal the DLL (which is inside Teams/OBS)
-            try { frameReadySemaphore.Release(1); } catch (SemaphoreFullException) { }
-
-            Thread.Sleep(33); // ~30fps
-        }
-
+        Update();
 
         Exit();
     }
@@ -107,12 +64,14 @@ public static class Program
     private static void Exit()
     {
         _shareFile.Dispose();
-        MFFunctions.MFShutdown();
     }
 
-    private static byte[] Update()
+    private static void Update()
     {
         _imageEvent.WaitOne();
+
+        Console.WriteLine(_index);
+        Console.WriteLine(_offsets[_index]);
             _imageViewStream = _shareFile.CreateViewStream(_offsets[_index], 0xFE100);
             byte[] buffer = new byte[0xFE100];
             _imageViewStream.Read(buffer, 0, 0xFE100);
@@ -136,29 +95,372 @@ public static class Program
             Mat _right = ConvertImageSharpToGrayscaleMat(decodedImageright);
             Mat left = new Mat(new Size(1024, 1016),MatType.CV_8UC1);
             Mat right = new Mat(new Size(1024, 1016),MatType.CV_8UC1);
-          Cv2.Remap(_left,left,undistortionX,undistortionY,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
-          Cv2.Remap(_right,right,undistortionX,undistortionY,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
-        CropMat(ref left,0,0,1016,1016);
-        CropMat(ref right,0,0,1016,1016);
-        Cv2.Resize(left,_left,new Size(960,960));
-        Cv2.Resize(right,_right,new Size(960,960));
-        left = _left;
-        right = _right;
-        Mat combined = new Mat();
-        Mat[] list = {left,right};
-        Cv2.HConcat(list,combined);
-        return combined.ToBytes();
+
+
+
+          /* if (File.Exists("./calibration.cal"))
+           {
+               Mat cameraMatrix2 = Mat.Eye(3, 3, MatType.CV_64F);
+               double[,] matrix2 = new double[3,3];
+               Mat distCoeffs2 = Mat.Zeros(1, 5, (MatType)MatType.CV_64F);
+               double[] distortion2 = new double[5];
+               string[] contents = File.ReadAllLines("./calibration.cal");
+               int i = 1;
+               for (; i < distortion2.Length; i++)
+               {
+                   distortion2[i - 1] = double.Parse(contents[i]);
+               }
+               for (int j = 0; j < 3; j++)
+               {
+                   for (int k = 0; k < 3; k++)
+                   {
+                       matrix2[j, k] = double.Parse(contents[i]);
+                       i++;
+                   }
+               }
+               Console.WriteLine("Distortion: ");
+               foreach (var item in distortion2)
+                   Console.WriteLine(item);
+               Console.WriteLine("Matrix: ");
+               foreach (var item in matrix2)
+               {
+                   Console.WriteLine(item);
+               }
+
+               Cv2.Undistort(_left, left, cameraMatrix2, distCoeffs2);
+           }*/
+          Mat undistortion = new Mat();
+          undistortion = UndistortDiagnostics.BuildMapFromXY(undistortionX,undistortionY);
+          UndistortDiagnostics.AnalyzeMap(undistortion,"run1");
+
+          Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+          Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+          while (Cv2.WaitKey() == -1)
+          {
+              int[] dimensions = { 1, 1, 160, 160 };
+              Mat modelinputleft = new Mat();
+              Mat modelinputright = new Mat();
+              if (false)
+              {
+                  Cv2.Resize(left, modelinputleft, new Size(160, 160));
+                  Cv2.Resize(right, modelinputright, new Size(160, 160));
+
+                  var session = new InferenceSession("C:\\Users\\nolan\\Downloads\\grayscale_detection_160x160.onnx");
+                  Tensor<float> valuesleft;
+                  valuesleft = new DenseTensor<float>(dimensions);
+                  for (int y = 0; y < 160; y++)
+                  {
+                      for (int x = 0; x < 160; x++)
+                      {
+                          // Get the 8-bit (byte) pixel value from the Mat
+                          byte pixelValue = modelinputleft.At<byte>(y, x);
+                          // Normalize and add to the 1D float array
+                          valuesleft[0, 0, y, x] = (float)pixelValue / 255.0f;
+                      }
+                  }
+
+                  //       session.InputNames.ToList().ForEach(Console.WriteLine);
+                  session.OutputNames.ToList().ForEach(Console.WriteLine);
+                  /* foreach (var item in session.InputNames)
+                   {
+                       Console.WriteLine("Dimensions: " + session.InputMetadata[item].Dimensions[0]);
+                       Console.WriteLine("Dimensions: " + session.InputMetadata[item].Dimensions[1]);
+                       Console.WriteLine("ElementDataType: " + session.InputMetadata[item].ElementDataType);
+                       Console.WriteLine("IsTensor: " + session.InputMetadata[item].IsTensor);
+                       Console.WriteLine("Type: " + session.InputMetadata[item].OnnxValueType);
+                   }*/
+                  var inputs = new List<NamedOnnxValue>();
+                  //  outputs.Add(NamedOnnxValue.CreateFromTensor("hand_exists",null));
+                  NamedOnnxValue input = NamedOnnxValue.CreateFromTensor(session.InputNames[0], valuesleft);
+                  inputs.Add(input);
+                  var outputs = session.Run(inputs);
+                  //Console.WriteLine(outputs[0].AsTensor<float>().GetArrayString());
+                 // Console.WriteLine(outputs[0].AsTensor<float>()[0, 1]);
+                 Console.WriteLine(outputs[0].AsTensor<float>()[0,0] * 255);
+                 Console.WriteLine(outputs[0].AsTensor<float>()[0,1] * 255);
+             //    Console.WriteLine(outputs[1].AsTensor<float>()[0,0] * 255);
+              //   Console.WriteLine(outputs[2].AsTensor<float>()[0,0] * 255);
+              }
+              else
+              {
+                  int[] dimensions2 = { 1, 1, 128, 128 };
+                  Cv2.Resize(left, modelinputleft, new Size(128, 128));
+                  Cv2.Resize(right, modelinputright, new Size(128, 128));
+
+                  var session = new InferenceSession("C:\\Users\\nolan\\Downloads\\grayscale_keypoint_jan18.onnx");
+                  Tensor<float> valuesleft;
+                  valuesleft = new DenseTensor<float>(dimensions2);
+                  for (int y = 0; y < 128; y++)
+                  {
+                      for (int x = 0; x < 128; x++)
+                      {
+                          // Get the 8-bit (byte) pixel value from the Mat
+                          byte pixelValue = modelinputleft.At<byte>(y, x);
+                          // Normalize and add to the 1D float array
+                          valuesleft[0, 0, y, x] = (float)pixelValue / 255.0f;
+                      }
+                  }
+                  //Console.WriteLine(session.InputMetadata[session.InputNames[2]]);
+                  var inputs = new List<NamedOnnxValue>();
+                  NamedOnnxValue input = NamedOnnxValue.CreateFromTensor(session.InputNames[0], valuesleft);
+
+                  var tensor2 = new DenseTensor<float>(1);
+                  tensor2[0] = 0f;
+                  NamedOnnxValue input2 = NamedOnnxValue.CreateFromTensor(session.InputNames[2], tensor2);
+
+                  var tensor3 = new DenseTensor<float>(new[] { 1, 42 });
+                  for (int i = 0; i < 42; i++)
+                  {
+                      tensor3[0,i] = 0f;
+                  }
+                  NamedOnnxValue input3 = NamedOnnxValue.CreateFromTensor(session.InputNames[1], tensor3);
+
+                  inputs.Add(input);
+                  inputs.Add(input3);
+                  inputs.Add(input2);
+
+                  var outputs = session.Run(inputs);
+                  Console.WriteLine(outputs[3].AsTensor<float>().GetArrayString());
+
+              }
+
+              //Console.WriteLine();
+              //Console.WriteLine(outputs[2].AsTensor<float>().GetValue(0));
+              _imageEvent.WaitOne();
+
+             // Console.WriteLine(_index);
+             // Console.WriteLine(_offsets[_index]);
+              _imageViewStream = _shareFile.CreateViewStream(_offsets[_index], 0xFE100);
+              buffer = new byte[0xFE100];
+              _imageViewStream.Read(buffer, 0, 0xFE100);
+              dataleft = new byte[0x7F000];
+              Array.Copy(buffer, 0x100, dataleft, 0, 0x7F000);
+              dataright = new byte[0x7F000];
+              Array.Copy(buffer, 0x100 + 0x7F000, dataright, 0, 0x7F000);
+              _imageViewStream.Dispose();
+              decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1016,CompressionFormat.Bc4);
+             // Console.WriteLine("after decode");
+              decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1016,CompressionFormat.Bc4);
+            //  Console.WriteLine("after decode");
+              _left = ConvertImageSharpToGrayscaleMat(decodedImage);
+              _right = ConvertImageSharpToGrayscaleMat(decodedImageright);
+              Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+              Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+
+          }
+
+        //  Cv2.DrawMarker(left,new Point((int)(outputs[1].AsTensor<float>().GetValue(0) * 160f),(int)(outputs[2].AsTensor<float>().GetValue(0) * 160f)),Scalar.White);
+
+
+
+
+
+          using (new Window("left image", left))
+
+           using (new Window("right image", right))
+           {
+               Cv2.WaitKey();
+           }
+           left.SaveImage("left.png");
+           RemapRingDiagnostics.RunAllDiagnostics(_left,undistortion,"run2");
+           UndistortDiagnostics.RemapAndSave(_left,undistortion,"run1.png");
+
+
+           List<Point3f[]> objpoints;
+           objpoints = new List<Point3f[]>();
+           List<Point2f[]> imagepoints;
+           imagepoints = new List<Point2f[]>();
+           List<Point2f[]> imagepointsr;
+           imagepointsr = new List<Point2f[]>();
+           for (int i = 0; i < 10; i++)
+           {
+               bool found = Cv2.FindChessboardCorners(left, new Size(10, 7), out var corners);
+               Console.WriteLine(found);
+               Cv2.DrawChessboardCorners(left, new Size(10, 7), corners, found);
+               using (new Window("chess image", left))
+               {
+                   Cv2.WaitKey();
+               }
+               bool foundr = Cv2.FindChessboardCorners(right, new Size(10, 7), out var cornersr);
+               Console.WriteLine(found);
+               Cv2.DrawChessboardCorners(right, new Size(10, 7), cornersr, foundr);
+               using (new Window("chess image", right))
+               {
+                   Cv2.WaitKey();
+               }
+                Thread.Sleep(1500);
+
+               if (found && foundr)
+               {
+                   Console.WriteLine("Chessboard found!");
+                   imagepoints.Add(corners.ToArray());
+                   imagepointsr.Add(cornersr.ToArray());
+                   objpoints.Add(CreateChessboardObjectPoints());
+               }
+
+               _imageEvent.WaitOne();
+
+               Console.WriteLine(_index);
+               Console.WriteLine(_offsets[_index]);
+               _imageViewStream = _shareFile.CreateViewStream(_offsets[_index], 0xFE100);
+               buffer = new byte[0xFE100];
+               _imageViewStream.Read(buffer, 0, 0xFE100);
+               dataleft = new byte[0x7F000];
+               Array.Copy(buffer, 0x100, dataleft, 0, 0x7F000);
+               dataright = new byte[0x7F000];
+               Array.Copy(buffer, 0x100 + 0x7F000, dataright, 0, 0x7F000);
+               _imageViewStream.Dispose();
+               decodedImage = decoder.DecodeRawToImageRgba32(dataleft,1024,1016,CompressionFormat.Bc4);
+               Console.WriteLine("after decode");
+               decodedImageright = decoder.DecodeRawToImageRgba32(dataright,1024,1016,CompressionFormat.Bc4);
+               Console.WriteLine("after decode");
+               _left = ConvertImageSharpToGrayscaleMat(decodedImage);
+               _right = ConvertImageSharpToGrayscaleMat(decodedImageright);
+               Cv2.Remap(_left,left,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+               Cv2.Remap(_right,right,undistortion,new Mat(),InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+           }
+           Mat cameraMatrix = Mat.Eye(3, 3, MatType.CV_64F);
+           double[,] matrix = new double[3,3];
+           Mat distCoeffs = Mat.Zeros(1, 5, (MatType)MatType.CV_64F);
+         double[] distortion = new double[5];
+         Mat H1 = new Mat();
+         Mat H2 = new Mat();
+         double[,] matrix1 = new double[3,3];
+         double[,] matrix2 = new double[3,3];
+         double[] coeffs1 = new double[5];
+         double[] coeffs2 = new double[5];
+         Mat R = new Mat();
+         Mat T = new Mat();
+         Mat E = new Mat();
+         Mat F = new Mat();
+
+            Cv2.StereoCalibrate(objpoints,imagepoints,imagepointsr,matrix1,coeffs1,matrix2,coeffs2,left.Size(),R,T,E,F,CalibrationFlags.None);
+          Cv2.CalibrateCamera(objpoints, imagepoints, left.Size(), matrix,distortion,out Vec3d[] rotation,out Vec3d[] translation,CalibrationFlags.None);
+          R.GetRectangularArray(out double[,] _R);
+          T.GetArray(out double[] _T);
+          Cv2.StereoRectify(matrix1,coeffs1,matrix2,coeffs2,left.Size(),_R,_T,out var R1,out var R2,out var P1,out var P2,out var Q,StereoRectificationFlags.None,-1,left.Size(),out var Valid1,out var Valid2);
+
+        Mat _matrix1 = new Mat();
+        Mat _matrix2 = new Mat();
+        _matrix1.SetRectangularArray(matrix1);
+        _matrix2.SetRectangularArray(matrix2);
+
+        Mat _coeffs1 = new Mat();
+        Mat _coeffs2 = new Mat();
+        _coeffs1.SetArray(coeffs1);
+        _coeffs2.SetArray(coeffs2);
+
+        Mat _R1 = new Mat();
+        Mat _R2 = new Mat();
+        _R1.SetRectangularArray(R1);
+        _R2.SetRectangularArray(R2);
+        Mat _P1 = new Mat();
+        Mat _P2 = new Mat();
+        _P1.SetRectangularArray(P1);
+        _P2.SetRectangularArray(P2);
+        Mat map1L = new Mat(), map2L = new Mat();
+        Cv2.InitUndistortRectifyMap(_matrix1, _coeffs1, _R1, _P1, left.Size(), MatType.CV_16SC2.Value, map1L, map2L);
+
+        Mat map1R = new Mat(), map2R = new Mat();
+        Cv2.InitUndistortRectifyMap(_matrix2, _coeffs2, _R2, _P2, left.Size(), MatType.CV_16SC2.Value, map1R, map2R);
+        Mat map1 = new Mat(), map2 = new Mat();
+        Cv2.Remap(left,map1,map1L,map2L,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+        Cv2.Remap(right,map2,map1R,map2R,InterpolationFlags.Linear,BorderTypes.Constant,Scalar.AliceBlue);
+        left = map1;
+        right = map2;
+
+
+        var stereo = StereoBM.Create(16,15);
+          Mat left8bit = new Mat();
+          Mat right8bit = new Mat();
+          left.ConvertTo(left8bit, MatType.CV_8UC1);
+          right.ConvertTo(right8bit, MatType.CV_8UC1);
+          Mat depth = new Mat();
+          stereo.Compute(left8bit, right8bit, depth);
+
+          using (new Window("depth image", depth))
+          {
+              Cv2.WaitKey();
+          }
+
+          Console.WriteLine("calibrated");
+Console.WriteLine("Rotation: ");
+cameraMatrix.SetRectangularArray(matrix);
+distCoeffs.SetArray(distortion);
+       foreach (var item in rotation)
+           Console.WriteLine(item);
+       Console.WriteLine("Translation: ");
+       foreach (var item in translation)
+           Console.WriteLine(item);
+       Console.WriteLine("Distortion: ");
+       foreach (var item in distortion)
+           Console.WriteLine(item);
+       Console.WriteLine("Matrix: ");
+       foreach (var item in matrix)
+       {
+           Console.WriteLine(item);
+       }
+       Mat dst = new Mat();
+       Cv2.Undistort(left,dst,cameraMatrix,distCoeffs);
+       using (new Window("undistorted image", dst))
+       {
+           Cv2.WaitKey();
+       }
+       left.SaveImage("distorted.png");
+       dst.SaveImage("undistorted.png");
+       string file = "";
+
+       foreach (var item in distortion)
+       {
+           file += item + "\n";
+       }
+
+       foreach (var item in matrix)
+       {
+           file += item + "\n";
+       }
+       File.WriteAllText("./calibration.cal",file);
+           StereoRectifyFisheye.FishEyeUndistort.Undistort(ref left,ref right,"C:\\Users\\nolan\\Downloads\\psvr2_threshold.calibration.json");
 
     }
-    public static void CropMat(ref Mat _mat,int x_start,int y_start,int width,int height)
+    public static Mat ConvertImageSharpToMat(Image<Rgba32> image)
     {
-        // 2. Define the Region of Interest (ROI)
-        Rect roi = new Rect(x_start, y_start, width, height);
+        // 1. Prepare the raw pixel data array
+        // Rgba32 has 4 bytes per pixel (R, G, B, A)
+        int byteCount = image.Width * image.Height * 4;
+        byte[] pixelBytes = new byte[byteCount];
 
-        // 3. Perform the crop using SubMat (creates a header for the sub-rectangle)
-        // Note: 'cropped_img' is a view, use .Clone() if you want an independent copy
-        Mat cropped_img = _mat.SubMat(roi);
-        _mat = cropped_img;
+        // Copy data from ImageSharp into the C# array
+        image.CopyPixelDataTo(pixelBytes);
+
+        GCHandle handle = GCHandle.Alloc(pixelBytes, GCHandleType.Pinned);
+
+        try
+        {
+            // 2. Safely get the memory address and create the Mat
+            IntPtr ptr = handle.AddrOfPinnedObject();
+
+            // The Mat(int rows, int cols, MatType type, IntPtr data) constructor
+            // is the correct candidate for wrapping unmanaged data.
+            using (Mat rgbaMat = Mat.FromPixelData(image.Height, image.Width, MatType.CV_8UC4, ptr))
+            {
+                // 3. Convert from RGBA (ImageSharp order) to BGRA (OpenCV order)
+                // The Mat created in step 2 is an RGBA Mat.
+                Mat bgraMat = new Mat();
+                Cv2.CvtColor(rgbaMat, bgraMat, ColorConversionCodes.RGBA2BGRA);
+
+                // bgraMat is a new Mat with a copy of the data, now in the correct format.
+                return bgraMat;
+            }
+        }
+        finally
+        {
+            // 4. Release the pinned handle
+            if (handle.IsAllocated)
+            {
+                handle.Free();
+            }
+        }
     }
     public static Mat ConvertImageSharpToGrayscaleMat(Image<Rgba32> image)
     {
@@ -190,5 +492,18 @@ public static class Program
                 handle.Free();
             }
         }
+    }
+    public static Point3f[] CreateChessboardObjectPoints(int cols = 10, int rows = 7, float squareSize = 1.0f)
+    {
+        var objp = new Point3f[cols * rows];
+        int idx = 0;
+        for (int y = 0; y < rows; y++)
+        {
+            for (int x = 0; x < cols; x++)
+            {
+                objp[idx++] = new Point3f(x * squareSize, y * squareSize, 0f);
+            }
+        }
+        return objp;
     }
 }
